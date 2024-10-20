@@ -1,19 +1,20 @@
-#include <stdio.h>
-#include <inttypes.h>
-#include "sdkconfig.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "sdkconfig.h"
+#include <inttypes.h>
+#include <stdio.h>
 
 #include "SCServo.h"
 
+#include <cassert>
+#include <chrono>
 #include <iostream>
 #include <thread>
-#include <chrono>
 
-#include "esp_timer_cxx.hpp"
 #include "esp_exception.hpp"
+#include "esp_timer_cxx.hpp"
 
 using namespace std;
 using namespace idf;
@@ -24,98 +25,123 @@ using namespace idf::esp_timer;
 #define S_RXD 18
 #define S_TXD 19
 
-
-// Camera servo ID = 1
-// Base servo ID = 2
-// Hard limits for the cameras after homing with st.CalibrationOfs(1/2) : 
-constexpr int kCamServoUpLimit = 1600;
+// Hard limits for the cameras after homing with st.CalibrationOfs(1/2) :
+constexpr int kCamServoUpLimit   = 1600;
 constexpr int kCamServoDownLimit = 2300;
-constexpr int kBaseServoLeftLimit = 1200; // assuming forward of the robot is looking opposite to usb ports
+// assuming forward of the robot is looking opposite to usb ports
+constexpr int kBaseServoLeftLimit  = 1200;
 constexpr int kBaseServoRightLimit = 2700;
 
 constexpr int kCamServoId{1};
 constexpr int kBaseServoId{2};
 
+namespace
+{
+// If the given servo is within hard limits
+bool isWithinHardLimits(const int servo_id, const int servo_pos)
+{
+    switch (servo_id)
+    {
+    case kCamServoId:
+    {
+        return (servo_pos > kCamServoUpLimit) && (servo_pos < kCamServoDownLimit);
+    }
+    case kBaseServoId:
+    {
+        return (servo_pos > kBaseServoLeftLimit) && (servo_pos < kBaseServoRightLimit);
+    }
+    default:
+    {
+        assert(false && "Unhandled servo motor id");
+        return false;
+    }
+    }
+}
+} // namespace
+
 extern "C" void app_main(void)
 {
-    try {
+    try
+    {
 
-    	int cam_pos, base_pos;
+        int cam_pos, base_pos;
 
-    	SMS_STS st;
-	    ESP32Serial esp_serial(UART_NUM_1); 
-	    esp_serial.begin(1000000, S_RXD, S_TXD);
-	    st.pSerial = &esp_serial;    	
+        SMS_STS     st;
+        ESP32Serial esp_serial(UART_NUM_1);
+        esp_serial.begin(1000000, S_RXD, S_TXD);
+        st.pSerial = &esp_serial;
 
-		printf("Hello world!\n");
+        printf("Hello world!\n");
 
-		// st.WritePosEx(1, 1750, 30, 10);//servo(ID1) speed=3400，acc=50，move to position=4095.
+        // st.WritePosEx(1, 1750, 30, 10);//servo(ID1) speed=3400，acc=50，move to
+        // position=4095.
 
-		// st.WritePosEx(2, 2000, 30, 10);//servo(ID1) speed=3400，acc=50，move to position=4095.
+        // st.WritePosEx(2, 2000, 30, 10);//servo(ID1) speed=3400，acc=50，move to
+        // position=4095.
 
+        int  prev_pos    = 0;
+        bool going_right = false;
 
-		int prev_pos = 0;
-		bool going_right = false;
+        while (true)
+        {
 
-		// constexpr int kYawServoOffset
-		while(true)
-		{
+            cam_pos = st.ReadPos(kCamServoId);
+            if (cam_pos != -1)
+            {
+                printf("camera servo position: %d\n", cam_pos);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+            else
+            {
+                printf("read position err\n");
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+            }
 
-		  cam_pos = st.ReadPos(kCamServoId);
-		  if(cam_pos!=-1){
-		    printf("camera servo position: %d\n",cam_pos);
-		    vTaskDelay(100 / portTICK_PERIOD_MS);
-		  }else{
-		    printf("read position err\n");
-		    vTaskDelay(1000 / portTICK_PERIOD_MS);
-		  }	
+            base_pos = st.ReadPos(kBaseServoId);
+            if (base_pos != -1)
+            {
+                printf("base servo position: %d\n", base_pos);
 
-		  base_pos = st.ReadPos(kBaseServoId);
-		  if(base_pos!=-1){
-		    printf("base servo position: %d\n",base_pos);
+                // Is within legal limits
+                if (isWithinHardLimits(kBaseServoId, base_pos))
+                {
+                    if (!going_right)
+                    {
+                        if (base_pos >= (kBaseServoLeftLimit + 200))
+                        {
+                            printf("going left!\n");
+                            st.WritePosEx(kBaseServoId, kBaseServoLeftLimit + 200, 1000, 50);
+                        }
+                        if (base_pos - prev_pos == 0)
+                        {
+                            going_right = (!going_right);
+                        }
+                    }
+                    else
+                    {
+                        if (base_pos <= (kBaseServoRightLimit - 200))
+                        {
+                            printf("going right!\n");
+                            st.WritePosEx(kBaseServoId, kBaseServoRightLimit - 200, 1000, 50);
+                        }
+                        if (base_pos - prev_pos == 0)
+                        {
+                            going_right = (!going_right);
+                        }
+                    }
+                }
 
-		    // Is within legal limits
-		    if((base_pos>=kBaseServoLeftLimit) && (base_pos<=kBaseServoRightLimit))
-		    {
-		    	if(!going_right)
-		    	{
-			    	if(base_pos>=(kBaseServoLeftLimit+200))
-			    	{
-			    		printf("going left!\n");
-			    		st.WritePosEx(kBaseServoId, kBaseServoLeftLimit+200, 1000, 50);
-			    	}
-			    	if(base_pos-prev_pos==0)
-			    	{
-			    		going_right = (!going_right);
-			    	}
-		    	}
-		    	else
-		    	{
-			    	if(base_pos<=(kBaseServoRightLimit-200))
-			    	{
-			    		printf("going right!\n");		    		
-			    		st.WritePosEx(kBaseServoId, kBaseServoRightLimit-200, 1000, 50);		    		
-			    	}
-			    	if(base_pos-prev_pos==0)
-			    	{
-			    		going_right = (!going_right);
-			    	}			    	    		
-		    	}
+                prev_pos = base_pos;
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+            else
+            {
+                printf("read position err\n");
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+            }
 
-
-		    }
-
-		    prev_pos = base_pos;
-		    vTaskDelay(100 / portTICK_PERIOD_MS);
-		  }
-		  else{
-		    printf("read position err\n");
-		    vTaskDelay(1000 / portTICK_PERIOD_MS);
-		  }			  			
-
-			vTaskDelay(100 / portTICK_PERIOD_MS);
-		}
-
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+        }
 
         printf("Setting up timer to trigger in 500ms\n");
         ESPTimer timer([]() { printf("timeout\n"); });
@@ -128,7 +154,9 @@ extern "C" void app_main(void)
         timer2.start_periodic(chrono::microseconds(200 * 1000));
 
         this_thread::sleep_for(std::chrono::milliseconds(1050));
-    } catch (const ESPException &e) {
+    }
+    catch (const ESPException &e)
+    {
         printf("Exception with error: %d\n", e.error);
     }
     printf("Finished\n");
