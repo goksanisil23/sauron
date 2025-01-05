@@ -39,7 +39,9 @@ constexpr int kCamServoId{1};
 constexpr int kBaseServoId{2};
 
 constexpr unsigned long kMotorSerialBaudRate{1000000};
-constexpr unsigned long kPiSerialBaudRate{115200};
+constexpr unsigned long kPiSerialBaudRate{921600};
+
+constexpr int kServoIncrement{50};
 
 namespace
 {
@@ -63,15 +65,17 @@ bool isWithinHardLimits(const int servo_id, const int servo_pos)
     }
     }
 }
+
 } // namespace
 
 extern "C" void app_main(void)
 {
     uint8_t receive_buffer[ESP32Serial::kUartBufferSize];
-    uint8_t send_buffer[ESP32Serial::kUartBufferSize + 32];
-    char    message[ESP32Serial::kUartBufferSize];
+    // uint8_t send_buffer[ESP32Serial::kUartBufferSize + 32];
+    char message[ESP32Serial::kUartBufferSize];
 
     int cam_pos, base_pos;
+    int cam_pos_to_send = 0, base_pos_to_send = 0;
 
     SMS_STS     motor_control;
     ESP32Serial motor_control_serial(MOTOR_UART);
@@ -79,7 +83,6 @@ extern "C" void app_main(void)
 
     try
     {
-
         motor_control_serial.begin(kMotorSerialBaudRate, S_RXD_MOTOR_SERIAL, S_TXD_MOTOR_SERIAL);
         motor_control.pSerial = &motor_control_serial;
         esp_pi_serial.begin(kPiSerialBaudRate);
@@ -87,52 +90,77 @@ extern "C" void app_main(void)
         int ctr{0};
         while (true)
         {
+            int base_servo_increment = 0;
+            int cam_servo_increment  = 0;
+
             // ---------- Pi communication ---------
             int bytes_read = esp_pi_serial.read(receive_buffer, sizeof(receive_buffer));
             if (bytes_read > 0)
             {
-                // memcpy(send_buffer, receive_buffer, bytes_read);
-                // uint8_t *int_ptr = reinterpret_cast<uint8_t *>(&ctr);
-                // memcpy(send_buffer + bytes_read, int_ptr, sizeof(ctr));
-                // int ret = esp_pi_serial.write(send_buffer, sizeof(ctr) + bytes_read);
-                // if (ret == -1)
-                // {
-                //     printf("[ESP] write error\n");
-                // }
-
-                memcpy(message, receive_buffer, bytes_read);
-                // message[bytes_read] = '\0'; // Null-terminate the string
-                printf("[ESP] Received %d bytes: %s\n", bytes_read, message);
-                int ret = esp_pi_serial.write((uint8_t *)message, bytes_read);
-                if (ret == -1)
+                if (receive_buffer[bytes_read - 1] == '\0')
                 {
-                    printf("[ESP] write error\n");
+                    memcpy(message, receive_buffer, bytes_read);
+                    const char *receive_buf_char = reinterpret_cast<char *>(receive_buffer);
+                    if (strncmp(receive_buf_char, "right\0", bytes_read) == 0)
+                    {
+                        base_servo_increment = kServoIncrement;
+                    }
+                    else if (strncmp(receive_buf_char, "left\0", bytes_read) == 0)
+                    {
+                        base_servo_increment = -kServoIncrement;
+                    }
+                    else if (strncmp(receive_buf_char, "up\0", bytes_read) == 0)
+                    {
+                        cam_servo_increment = -kServoIncrement;
+                    }
+                    else if (strncmp(receive_buf_char, "down\0", bytes_read) == 0)
+                    {
+                        cam_servo_increment = kServoIncrement;
+                    }
+                    // esp_pi_serial.flush();
                 }
-            }
-            else
-            {
-                printf("[ESP] No data %u\n", ctr);
             }
 
             // ---------- Motor control -----------
             base_pos = motor_control.ReadPos(kBaseServoId);
-            if (base_pos != -1)
-            {
-                printf("base servo position: %d\n", base_pos);
+            cam_pos  = motor_control.ReadPos(kCamServoId);
 
-                if (isWithinHardLimits(kBaseServoId, base_pos))
+            if ((base_pos != -1))
+            {
+                base_pos_to_send = base_pos;
+                // printf("[ESP] base servo position: %d\n", base_pos);
+                if (isWithinHardLimits(kBaseServoId, base_pos + base_servo_increment))
                 {
                     // Move the motor based on the message received from pi
-
-                    motor_control.WritePosEx(kBaseServoId, base_pos + 10, 2000, 100);
+                    motor_control.WritePosEx(kBaseServoId, base_pos + base_servo_increment, 2000, 100);
                 }
-
-                vTaskDelay(100 / portTICK_PERIOD_MS);
             }
             else
             {
-                printf("read position err\n");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                printf("base encoder read position err\n");
+            }
+            if ((cam_pos != -1))
+            {
+                cam_pos_to_send = cam_pos;
+                // printf("[ESP] cam servo position: %d\n", cam_pos);
+                if (isWithinHardLimits(kCamServoId, cam_pos + cam_servo_increment))
+                {
+                    // Move the motor based on the message received from pi
+                    motor_control.WritePosEx(kCamServoId, cam_pos + cam_servo_increment, 2000, 100);
+                }
+            }
+            else
+            {
+                printf("cam encoder read position err\n");
+            }
+
+            // Write both cam and base servo positions to pi
+            sprintf(message, "cam_enc:%d,base_enc:%d\n", cam_pos_to_send, base_pos_to_send);
+            int ret = esp_pi_serial.write((uint8_t *)message, strlen(message));
+            esp_pi_serial.flush();
+            if (ret == -1)
+            {
+                printf("[ESP] write error\n");
             }
 
             ctr++;
