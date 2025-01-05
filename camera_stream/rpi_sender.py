@@ -5,6 +5,8 @@ import time
 
 from picamera2 import Picamera2
 
+SEND_BUFFER_SIZE_BYTES = 30000
+
 # Set up camera
 picam2 = Picamera2()
 picam2.options["quality"] = 95
@@ -16,6 +18,11 @@ picam2.start()
 # Socket setup
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER_SIZE_BYTES)
+send_buffer_size = server_socket.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
+server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+print(f"Send buffer size: {send_buffer_size} bytes")
+
 server_socket.bind(("0.0.0.0", 8000))
 server_socket.listen(1)
 print("Waiting for connection...")
@@ -38,10 +45,10 @@ try:
         connection.sendall(image_data)
         elapsed_time = time.time() - start_time
         print(f"Total time: {elapsed_time:.6f} seconds")
-        print(f"image size: {len(image_data)}")
+        # print(f"image size: {len(image_data)}")
 
         # Without the sleep, in video mode, receiver is delayed a lot
-        time.sleep(0.1)
+        # time.sleep(0.1)
 
 finally:
     connection.close()

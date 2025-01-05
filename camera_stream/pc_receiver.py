@@ -9,6 +9,8 @@ from PIL import Image
 
 RASPBERRY_PI_IP = "192.168.1.180"
 
+RECEIVE_BUFFER_SIZE_BYTES = 30000
+
 
 class ImageClient:
     def __init__(self, host, port):
@@ -24,7 +26,15 @@ class ImageClient:
     def receive_images(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER_SIZE_BYTES
+            )
+            receive_buffer_size = self.sock.getsockopt(
+                socket.SOL_SOCKET, socket.SO_RCVBUF
+            )
             self.sock.connect((self.host, self.port))
+
+            print(f"Receive buffer size: {receive_buffer_size} bytes")
             print(f"Connected to server {self.host}:{self.port}")
 
             while self.running:
@@ -35,7 +45,6 @@ class ImageClient:
                     print("No size data received. Exiting.")
                     break
                 image_size = int.from_bytes(size_data, "big")
-                # print(f"image size: {image_size}")
 
                 # Receive the image data based on the size
                 image_data = self.recvall(image_size)
@@ -43,15 +52,13 @@ class ImageClient:
                     print("No image data received. Exiting.")
                     break
                 recv_t = time.time()
-                recv_time = time.time() - start_time
-                # Convert bytes to PIL Image and then to OpenCV format
+                recv_time = recv_t - start_time
 
+                # Convert bytes to PIL Image and then to OpenCV format
                 image = Image.open(io.BytesIO(image_data))
-                image = cv2.cvtColor(
-                    np.array(image), cv2.COLOR_RGB2BGR
-                )  # Convert RGB to BGR for OpenCV
+                # Convert RGB to BGR for OpenCV
+                image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
                 decode_time = time.time() - recv_t
-                # print(f"Decode time: {decode_time:.6f} seconds")
 
                 # # Display the image using OpenCV
                 cv2.imshow("Stream", image)
@@ -64,7 +71,7 @@ class ImageClient:
                 print(f"receive time: {recv_time:.6f} seconds")
                 print(f"decode time: {decode_time:.6f} seconds")
                 print(f"Total time: {total_time:.6f} seconds")
-                print(f"image size: {image_size}")
+                # print(f"image size: {image_size}")
 
         except ConnectionRefusedError:
             print(f"Failed to connect to {self.host}:{self.port}")
