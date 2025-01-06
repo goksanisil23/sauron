@@ -32,16 +32,33 @@ using namespace idf::esp_timer;
 constexpr int kCamServoUpLimit{1600};
 constexpr int kCamServoDownLimit{2300};
 // assuming forward of the robot is looking opposite to usb ports
-constexpr int kBaseServoLeftLimit{1200};
-constexpr int kBaseServoRightLimit{2700};
+constexpr int kBaseServoLeftLimit{1000};
+constexpr int kBaseServoRightLimit{3000};
 
 constexpr int kCamServoId{1};
 constexpr int kBaseServoId{2};
 
-constexpr unsigned long kMotorSerialBaudRate{1000000};
-constexpr unsigned long kPiSerialBaudRate{921600};
+constexpr unsigned long kMotorSerialBaudRate{1'000'000};
+constexpr unsigned long kPiSerialBaudRate{921'600};
 
 constexpr int kServoIncrement{50};
+constexpr int kServoAccel{100};
+constexpr int kServoSpeed{500};
+
+enum class ServoDirectionCmd
+{
+    kInvalid,
+    kLeft,
+    kRight,
+    kUp,
+    kDown
+};
+
+struct ServoSetpoints
+{
+    int cam_pos{-1};
+    int base_pos{-1};
+};
 
 namespace
 {
@@ -66,13 +83,69 @@ bool isWithinHardLimits(const int servo_id, const int servo_pos)
     }
 }
 
+// Check if the incoming serial message is a direction message, and if so, return the type of direction
+ServoDirectionCmd checkDirMessage(const uint8_t *buffer, const int bytes_read)
+{
+    const char *buffer_str = reinterpret_cast<const char *>(buffer);
+    printf("[ESP] Received: %s\n", buffer_str);
+
+    // Check if the message starts with "DIR:"
+    if ((bytes_read < 4) || (strncmp(buffer_str, "DIR:", 4) != 0))
+    {
+        return ServoDirectionCmd::kInvalid;
+    }
+    if (buffer[bytes_read - 1] == '\0')
+    {
+        if (strncmp(buffer_str, "DIR:right\0", bytes_read) == 0)
+        {
+            return ServoDirectionCmd::kRight;
+        }
+        else if (strncmp(buffer_str, "DIR:left\0", bytes_read) == 0)
+        {
+            return ServoDirectionCmd::kLeft;
+        }
+        else if (strncmp(buffer_str, "DIR:up\0", bytes_read) == 0)
+        {
+            return ServoDirectionCmd::kUp;
+        }
+        else if (strncmp(buffer_str, "DIR:down\0", bytes_read) == 0)
+        {
+            return ServoDirectionCmd::kDown;
+        }
+        else
+        {
+            return ServoDirectionCmd::kInvalid;
+        }
+    }
+    return ServoDirectionCmd::kInvalid;
+}
+
+// Check if incoming serial message is a value message, and if so, set the servo setpoints
+ServoSetpoints checkValMessage(const uint8_t *buffer, const int bytes_read)
+{
+    const char *buffer_str = reinterpret_cast<const char *>(buffer);
+    // Check if the message starts with "VAL:"
+    if ((bytes_read < 4) || (strncmp(buffer_str, "VAL:", 4) != 0))
+    {
+        return {};
+    }
+    if (buffer[bytes_read - 1] == '\0')
+    {
+        int cam_pos{-1};
+        int base_pos{-1};
+        sscanf(buffer_str, "VAL:cam=%d,base=%d", &cam_pos, &base_pos);
+        printf("[ESP] cam setpoint: %d, base setpoint: %d\n", cam_pos, base_pos);
+        return {cam_pos, base_pos};
+    }
+    return {};
+}
+
 } // namespace
 
 extern "C" void app_main(void)
 {
     uint8_t receive_buffer[ESP32Serial::kUartBufferSize];
-    // uint8_t send_buffer[ESP32Serial::kUartBufferSize + 32];
-    char message[ESP32Serial::kUartBufferSize];
+    char    message[ESP32Serial::kUartBufferSize];
 
     int cam_pos, base_pos;
     int cam_pos_to_send = 0, base_pos_to_send = 0;
@@ -90,49 +163,59 @@ extern "C" void app_main(void)
         int ctr{0};
         while (true)
         {
-            int base_servo_increment = 0;
-            int cam_servo_increment  = 0;
+            int               base_servo_increment = 0;
+            int               cam_servo_increment  = 0;
+            ServoDirectionCmd dir_cmd{ServoDirectionCmd::kInvalid};
+            ServoSetpoints    setpoints{};
 
             // ---------- Pi communication ---------
             int bytes_read = esp_pi_serial.read(receive_buffer, sizeof(receive_buffer));
             if (bytes_read > 0)
             {
-                if (receive_buffer[bytes_read - 1] == '\0')
+                dir_cmd   = checkDirMessage(receive_buffer, bytes_read);
+                setpoints = checkValMessage(receive_buffer, bytes_read);
+                switch (dir_cmd)
                 {
-                    memcpy(message, receive_buffer, bytes_read);
-                    const char *receive_buf_char = reinterpret_cast<char *>(receive_buffer);
-                    if (strncmp(receive_buf_char, "right\0", bytes_read) == 0)
-                    {
-                        base_servo_increment = kServoIncrement;
-                    }
-                    else if (strncmp(receive_buf_char, "left\0", bytes_read) == 0)
-                    {
-                        base_servo_increment = -kServoIncrement;
-                    }
-                    else if (strncmp(receive_buf_char, "up\0", bytes_read) == 0)
-                    {
-                        cam_servo_increment = -kServoIncrement;
-                    }
-                    else if (strncmp(receive_buf_char, "down\0", bytes_read) == 0)
-                    {
-                        cam_servo_increment = kServoIncrement;
-                    }
-                    // esp_pi_serial.flush();
+                case ServoDirectionCmd::kRight:
+                {
+                    base_servo_increment = kServoIncrement;
+                    break;
+                }
+                case ServoDirectionCmd::kLeft:
+                {
+                    base_servo_increment = -kServoIncrement;
+                    break;
+                }
+                case ServoDirectionCmd::kUp:
+                {
+                    cam_servo_increment = -kServoIncrement;
+                    break;
+                }
+                case ServoDirectionCmd::kDown:
+                {
+                    cam_servo_increment = kServoIncrement;
+                    break;
+                }
+                case ServoDirectionCmd::kInvalid:
+                {
+                    break;
+                }
                 }
             }
 
             // ---------- Motor control -----------
             base_pos = motor_control.ReadPos(kBaseServoId);
             cam_pos  = motor_control.ReadPos(kCamServoId);
+            const bool is_dir_mode{dir_cmd != ServoDirectionCmd::kInvalid};
+            const bool is_val_mode{(setpoints.cam_pos != -1) && (setpoints.base_pos != -1)};
 
             if ((base_pos != -1))
             {
                 base_pos_to_send = base_pos;
-                // printf("[ESP] base servo position: %d\n", base_pos);
-                if (isWithinHardLimits(kBaseServoId, base_pos + base_servo_increment))
+                if (is_dir_mode && isWithinHardLimits(kBaseServoId, base_pos + base_servo_increment))
                 {
                     // Move the motor based on the message received from pi
-                    motor_control.WritePosEx(kBaseServoId, base_pos + base_servo_increment, 2000, 100);
+                    motor_control.WritePosEx(kBaseServoId, base_pos + base_servo_increment, kServoSpeed, kServoAccel);
                 }
             }
             else
@@ -142,16 +225,27 @@ extern "C" void app_main(void)
             if ((cam_pos != -1))
             {
                 cam_pos_to_send = cam_pos;
-                // printf("[ESP] cam servo position: %d\n", cam_pos);
-                if (isWithinHardLimits(kCamServoId, cam_pos + cam_servo_increment))
+                if (is_dir_mode && isWithinHardLimits(kCamServoId, cam_pos + cam_servo_increment))
                 {
                     // Move the motor based on the message received from pi
-                    motor_control.WritePosEx(kCamServoId, cam_pos + cam_servo_increment, 2000, 100);
+                    motor_control.WritePosEx(kCamServoId, cam_pos + cam_servo_increment, kServoSpeed, kServoAccel);
                 }
             }
             else
             {
                 printf("cam encoder read position err\n");
+            }
+
+            if (is_val_mode)
+            {
+                if (isWithinHardLimits(kBaseServoId, setpoints.base_pos))
+                {
+                    motor_control.WritePosEx(kBaseServoId, setpoints.base_pos, kServoSpeed, kServoAccel);
+                }
+                if (isWithinHardLimits(kCamServoId, setpoints.cam_pos))
+                {
+                    motor_control.WritePosEx(kCamServoId, setpoints.cam_pos, kServoSpeed, kServoAccel);
+                }
             }
 
             // Write both cam and base servo positions to pi
