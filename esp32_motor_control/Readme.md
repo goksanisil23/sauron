@@ -10,3 +10,6 @@ idf.py build
 
 - Flash and monitor
 idf.py -p /dev/ttyACM0 flash monitor
+
+## Python environment
+- python -m venv --system-site-packages my_venv

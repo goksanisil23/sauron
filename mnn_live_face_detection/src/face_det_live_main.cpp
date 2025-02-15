@@ -15,15 +15,20 @@
 #include <opencv2/imgproc.hpp>
 
 #include "CameraHandler.hpp"
+#include "MotorCommunication.hpp"
 #include "UltraFace.h"
 
-constexpr int32_t  kUltraFaceImgWidth  = 320;
-constexpr int32_t  kUltraFaceImgHeight = 240;
-constexpr uint32_t kImageCaptureWidth  = 800;
-constexpr uint32_t kImageCaptureHeight = 600;
-constexpr int      kDesiredFPS{30};
+constexpr int32_t            kUltraFaceImgWidth  = 320;
+constexpr int32_t            kUltraFaceImgHeight = 240;
+constexpr uint32_t           kImageCaptureWidth  = 800;
+constexpr uint32_t           kImageCaptureHeight = 600;
+constexpr std::array<int, 2> kInferenceThreadCoreIds{2, 3};
+constexpr std::array<int, 2> kMainThreadCoreIds{0, 1};
+constexpr int                kDesiredFPS{30};
 
-bool setThreadAffinity(const std::vector<int> &core_ids)
+constexpr float kAllowedPixError{20.F};
+
+bool setThreadAffinity(const std::array<int, 2> &core_ids)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -49,8 +54,8 @@ int main(int argc, char **argv)
     UltraFace   ultraface(mnn_path, kUltraFaceImgWidth, kUltraFaceImgHeight, 4, 0.65);
 
     // Init camera
-    CameraHandler camera(kImageCaptureWidth, kImageCaptureHeight, kDesiredFPS);
-    if (camera.initCamera() != 0)
+    CameraHandler camera_handler(kImageCaptureWidth, kImageCaptureHeight, kDesiredFPS);
+    if (camera_handler.initCamera() != 0)
     {
         std::cerr << "Failed to initialize the camera" << std::endl;
         return -1;
@@ -66,11 +71,14 @@ int main(int argc, char **argv)
     std::vector<FaceInfo>   face_info;
     std::mutex              face_mtx; // Protects access to face_info
 
+    // Initialize motor serial comm
+    motor_comm::initSerial();
+
     // Detection thread
-    std::thread detector(
+    std::thread detector_thread(
         [&]()
         {
-            if (!setThreadAffinity({2, 3}))
+            if (!setThreadAffinity(kInferenceThreadCoreIds))
             {
                 std::cerr << "Failed to set thread affinity for detector thread.\n";
             }
@@ -100,16 +108,26 @@ int main(int argc, char **argv)
             }
         });
 
-    if (!setThreadAffinity({0, 1}))
+    if (!setThreadAffinity(kMainThreadCoreIds))
     {
         std::cerr << "Failed to set thread affinity for main thread.\n";
         return -1;
     }
 
+    cv::namedWindow("Live face detection", cv::WINDOW_AUTOSIZE);
+
     cv::Mat captured_frame;
+    int     inc = 0;
+    int     camPos, basePos;
+    float   face_center_x, face_center_y;
     while (true)
     {
-        if (!camera.readFrame(captured_frame))
+        if (motor_comm::readEncoder(camPos, basePos))
+        {
+            // std::cout << "cam = " << camPos << ", base = " << basePos << std::endl;
+        }
+
+        if (!camera_handler.readFrame(captured_frame))
             continue;
 
         // Update the shared frame
@@ -128,24 +146,64 @@ int main(int argc, char **argv)
         }
 
         // Draw bounding boxes
-        for (const auto &face : current_faces)
+        if (current_faces.size() > 0)
         {
+            face_center_x = (current_faces[0].x1 + current_faces[0].x2) / 2;
+            face_center_y = (current_faces[0].y1 + current_faces[0].y2) / 2;
+
+            if ((face_center_x + kAllowedPixError) < (kImageCaptureWidth / 2))
+            {
+                motor_comm::write_serial_direction(motor_comm::Direction::LEFT);
+            }
+            else if ((face_center_x - kAllowedPixError) > (kImageCaptureWidth / 2))
+            {
+                motor_comm::write_serial_direction(motor_comm::Direction::RIGHT);
+            }
+            if ((face_center_y + kAllowedPixError) < (kImageCaptureHeight / 2))
+            {
+                motor_comm::write_serial_direction(motor_comm::Direction::UP);
+            }
+            else if ((face_center_y - kAllowedPixError) > (kImageCaptureHeight / 2))
+            {
+                motor_comm::write_serial_direction(motor_comm::Direction::DOWN);
+            }
+
             cv::rectangle(captured_frame,
-                          cv::Point(static_cast<int>(face.x1), static_cast<int>(face.y1)),
-                          cv::Point(static_cast<int>(face.x2), static_cast<int>(face.y2)),
+                          cv::Point(static_cast<int>(current_faces[0].x1), static_cast<int>(current_faces[0].y1)),
+                          cv::Point(static_cast<int>(current_faces[0].x2), static_cast<int>(current_faces[0].y2)),
                           cv::Scalar(0, 255, 0),
                           2);
         }
 
-        cv::imshow("libcamera-demo", captured_frame);
-        if (cv::waitKey(1) == 27) // ESC key to exit
+        cv::imshow("Live face detection", captured_frame);
+        int key{cv::waitKey(1)};
+        if (key == 27) // ESC
+        {
             break;
+        }
+        else if (key == 82) // Up arrow
+        {
+            motor_comm::write_serial_direction(motor_comm::Direction::UP);
+        }
+        else if (key == 84) // Down arrow
+        {
+            motor_comm::write_serial_direction(motor_comm::Direction::DOWN);
+        }
+        else if (key == 81) // Left arrow
+        {
+            motor_comm::write_serial_direction(motor_comm::Direction::LEFT);
+        }
+        else if (key == 83) // Right arrow
+        {
+            motor_comm::write_serial_direction(motor_comm::Direction::RIGHT);
+        }
     }
     // Clean up
     running = false;
     frame_cv.notify_one(); // Wake up the detector thread if waiting
-    detector.join();
+    detector_thread.join();
     cv::destroyAllWindows();
+    motor_comm::closeSerial();
 
     return 0;
 }

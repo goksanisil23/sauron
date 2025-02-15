@@ -15,3 +15,7 @@ This repo contains pan/tilt camera sensing and control applications, currently u
     https://github.com/9a4gl/ESP32Serial/tree/master
 - ESP-IDF setup: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/linux-macos-setup.html#get-started-prerequisites
 - ESP-IDF c++: https://github.com/espressif/esp-idf-cxx/tree/main
+
+
+# References
+- Face detection module: https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/tree/master/MNN

@@ -32,8 +32,8 @@ message(STATUS ${LIBCAMERA_BASE_LIBRARY})
 link_directories(mnn/lib)
 
 # Face detection on live camera
-add_executable(face_det_live src/face_det_live_main.cpp src/UltraFace.cpp src/LibCamera.cpp)
-target_link_libraries(face_det_live MNN ${OpenCV_LIBS} "${LIBCAMERA_LIBRARIES}")
+add_executable(face_det_live src/face_det_live_main.cpp src/UltraFace.cpp src/LibCamera.cpp src/MotorCommunication.hpp src/serialib.cpp)
+target_link_libraries(face_det_live "${LIBCAMERA_LIBRARIES}" MNN ${OpenCV_LIBS})
 
 # Single frame runner
 add_executable(single_inference src/single_inference_main.cpp src/UltraFace.cpp)
@@ -43,3 +43,9 @@ target_link_libraries(single_inference MNN ${OpenCV_LIBS})
 # Camera stream (no detection)
 add_executable(live_camera_stream src/live_camera_stream_main.cpp src/LibCamera.cpp)
 target_link_libraries(live_camera_stream ${OpenCV_LIBS} "${LIBCAMERA_LIBRARIES}")
+
+
+# Serial comm to motor
+add_executable(serial_comm src/serial_main.cpp src/MotorCommunication.hpp src/serialib.cpp)
+# target_link_libraries(serial_comm serial pthread)
+target_include_directories(serial_comm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

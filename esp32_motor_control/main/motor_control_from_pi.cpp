@@ -41,7 +41,7 @@ constexpr int kBaseServoId{2};
 constexpr unsigned long kMotorSerialBaudRate{1'000'000};
 constexpr unsigned long kPiSerialBaudRate{921'600};
 
-constexpr int kServoIncrement{50};
+constexpr int kServoIncrement{20};
 constexpr int kServoAccel{100};
 constexpr int kServoSpeed{500};
 

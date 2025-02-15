@@ -27,7 +27,7 @@ class CameraHandler
         controls_.set(controls::FrameDurationLimits, libcamera::Span<const int64_t, 2>({frame_time, frame_time}));
         controls_.set(controls::Brightness, 0.7);
         controls_.set(controls::Contrast, 2.0);
-        controls_.set(controls::ExposureTime, 20000);
+        controls_.set(controls::ExposureTime, 40'000);
         cam_.set(controls_);
 
         cam_.startCamera();
